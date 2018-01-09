@@ -12,7 +12,12 @@
 #include <stdint.h>
 #include <unistd.h>
 
-struct flashsim;
+struct flashsim {
+    int size;
+    int sector_size;
+
+    FILE *fh;
+};
 
 struct flashsim *flashsim_open(const char *name, int size, int sector_size);
 void flashsim_close(struct flashsim *sim);

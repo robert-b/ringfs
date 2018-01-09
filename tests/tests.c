@@ -71,14 +71,14 @@ static int op_sector_erase(struct ringfs_flash_partition *flash, int address)
     return 0;
 }
 
-static ssize_t op_program(struct ringfs_flash_partition *flash, int address, const void *data, size_t size)
+static int op_program(struct ringfs_flash_partition *flash, int address, const void *data, int size)
 {
     (void) flash;
     flashsim_program(sim, address, data, size);
     return size;
 }
 
-static ssize_t op_read(struct ringfs_flash_partition *flash, int address, void *data, size_t size)
+static int op_read(struct ringfs_flash_partition *flash, int address, void *data, int size)
 {
     (void) flash;
     flashsim_read(sim, address, data, size);
@@ -102,6 +102,7 @@ static struct ringfs_flash_partition flash = {
 
 static void fixture_flashsim_setup(void)
 {
+	ck_assert(sim == NULL);
     sim = flashsim_open("tests/ringfs.sim",
             flash.sector_size * (flash.sector_offset + flash.sector_count),
             flash.sector_size);

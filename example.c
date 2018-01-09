@@ -14,7 +14,6 @@
 
 
 /* Flash implementation & ops. */
-
 #define FLASH_SECTOR_SIZE       1024
 #define FLASH_TOTAL_SECTORS     16
 #define FLASH_PARTITION_OFFSET  8
@@ -36,14 +35,14 @@ static int op_sector_erase(struct ringfs_flash_partition *flash, int address)
     return 0;
 }
 
-static ssize_t op_program(struct ringfs_flash_partition *flash, int address, const void *data, size_t size)
+static int op_program(struct ringfs_flash_partition *flash, int address, const void *data, int size)
 {
     (void) flash;
     flashsim_program(sim, address, data, size);
     return size;
 }
 
-static ssize_t op_read(struct ringfs_flash_partition *flash, int address, void *data, size_t size)
+static int op_read(struct ringfs_flash_partition *flash, int address, void *data, int size)
 {
     (void) flash;
     flashsim_read(sim, address, data, size);
@@ -130,6 +129,9 @@ int main()
         assert(ringfs_fetch(&fs, &entry) == 0);
         printf("## level=%d message=%.16s\n", entry.level, entry.message);
     }
+
+    extern struct flashsim *sim;
+    flashsim_close(sim);
 
     return 0;
 }

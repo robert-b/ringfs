@@ -6,7 +6,6 @@
  * published by Sam Hocevar. See the COPYING file for more details.
  */
 
-#include "flashsim.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -14,18 +13,14 @@
 #include <stdlib.h>
 #include <assert.h>
 
+#include "flashsim.h"
+
 #ifdef FLASHSIM_LOG
 #define logprintf(args...) printf(args)
 #else
 #define logprintf(args...) do {} while (0)
 #endif
 
-struct flashsim {
-    int size;
-    int sector_size;
-
-    FILE *fh;
-};
 
 struct flashsim *flashsim_open(const char *name, int size, int sector_size)
 {
@@ -33,7 +28,11 @@ struct flashsim *flashsim_open(const char *name, int size, int sector_size)
 
     sim->size = size;
     sim->sector_size = sector_size;
-    sim->fh = fopen(name, "w+");
+    sim->fh = fopen(name, "r+");
+    if (NULL == sim->fh)
+    {
+    	 sim->fh = fopen(name, "w+");
+    }
     assert(sim->fh != NULL);
     assert(ftruncate(fileno(sim->fh), size) == 0);
 
@@ -42,6 +41,7 @@ struct flashsim *flashsim_open(const char *name, int size, int sector_size)
 
 void flashsim_close(struct flashsim *sim)
 {
+    fflush(sim->fh);
     fclose(sim->fh);
     free(sim);
 }
@@ -79,9 +79,11 @@ void flashsim_read(struct flashsim *sim, int addr, uint8_t *buf, int len)
 void flashsim_program(struct flashsim *sim, int addr, const uint8_t *buf, int len)
 {
     logprintf("flashsim_program(0x%08x) + %d bytes [ ", addr, len);
-    for (int i=0; i<len; i++) {
+    for (int i=0; i<len; i++)
+    {
         logprintf("%02x ", buf[i]);
-        if (i == 15) {
+        if (i == 15)
+        {
             logprintf("... ");
             break;
         }
@@ -94,7 +96,9 @@ void flashsim_program(struct flashsim *sim, int addr, const uint8_t *buf, int le
     assert(fread(data, 1, len, sim->fh) == (size_t) len);
 
     for (int i=0; i<(int) len; i++)
+    {
         data[i] &= buf[i];
+    }
 
     assert(fseek(sim->fh, addr, SEEK_SET) == 0);
     assert(fwrite(data, 1, len, sim->fh) == (size_t) len);
