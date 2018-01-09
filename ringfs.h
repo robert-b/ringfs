@@ -9,6 +9,10 @@
 #ifndef RINGFS_H
 #define RINGFS_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /**
  * @defgroup ringfs_api RingFS API
  * @{
@@ -18,6 +22,10 @@
 #include <stdio.h>
 #include <unistd.h>
 
+#define VISUALIZE_SECTORS_AND_SLOTS	1
+#undef VISUALIZE_SECTORS_AND_SLOTS
+
+
 /**
  * Flash memory + partition descriptor.
  */
@@ -26,6 +34,7 @@ struct ringfs_flash_partition
     int32_t sector_size;            /**< Sector size, in bytes. */
     int32_t sector_offset;          /**< Partition offset, in sectors. */
     int32_t sector_count;           /**< Partition size, in sectors. */
+    void *  user_data;              /**< User data */
 
     /**
      * Erase a sector.
@@ -52,11 +61,14 @@ struct ringfs_flash_partition
 };
 
 /** @private */
-struct ringfs_loc {
+struct ringfs_loc
+{
     int32_t sector;
     int32_t slot;
 };
 
+// page cache of 256 bytes contains slot status and cached data bytes
+#define CACHE_SIZE (256-4)
 /**
  * RingFS instance. Should be initialized with ringfs_init() befure use.
  * Structure fields should not be accessed directly.
@@ -74,6 +86,9 @@ typedef struct ringfs
     struct ringfs_loc read;
     struct ringfs_loc write;
     struct ringfs_loc cursor;
+
+    uint8_t	cache[CACHE_SIZE];
+    int32_t	cache_filling_level;
 } ringfs_t;
 
 /**
@@ -87,7 +102,7 @@ typedef struct ringfs
  * @param object_size Size of one stored object, in bytes.
  * @returns Zero on success, -1 on failure.
  */
-int32_t ringfs_init(ringfs_t *fs, struct ringfs_flash_partition *flash, uint32_t version, int32_t object_size);
+int32_t ringfs_init(ringfs_t * const fs, struct ringfs_flash_partition * const flash, uint32_t version, int32_t object_size);
 
 /**
  * Format the flash memory.
@@ -95,7 +110,7 @@ int32_t ringfs_init(ringfs_t *fs, struct ringfs_flash_partition *flash, uint32_t
  * @param fs Initialized RingFS instance.
  * @returns Zero on success, -1 on failure.
  */
-int32_t ringfs_format(ringfs_t *fs);
+int32_t ringfs_format(ringfs_t * const fs);
 
 /**
  * Scan the flash memory for a valid filesystem.
@@ -103,7 +118,7 @@ int32_t ringfs_format(ringfs_t *fs);
  * @param fs Initialized RingFS instance.
  * @returns Zero on success, -1 on failure.
  */
-int32_t ringfs_scan(ringfs_t *fs);
+int32_t ringfs_scan(ringfs_t * const fs);
 
 /**
  * Calculate maximum RingFS capacity.
@@ -111,7 +126,7 @@ int32_t ringfs_scan(ringfs_t *fs);
  * @param fs Initialized RingFS instance.
  * @returns Maximum capacity on success, -1 on failure.
  */
-int32_t ringfs_capacity(ringfs_t *fs);
+int32_t ringfs_capacity(ringfs_t * const fs);
 
 /**
  * Calculate approximate object count.
@@ -120,7 +135,7 @@ int32_t ringfs_capacity(ringfs_t *fs);
  * @param fs Initialized RingFS instance.
  * @returns Estimated object count on success, -1 on failure.
  */
-int32_t ringfs_count_estimate(ringfs_t *fs);
+int32_t ringfs_count_estimate(ringfs_t * const fs);
 
 /**
  * Calculate exact object count.
@@ -129,7 +144,7 @@ int32_t ringfs_count_estimate(ringfs_t *fs);
  * @param fs Initialized RingFS instance.
  * @returns Exact object count on success, -1 on failure.
  */
-int32_t ringfs_count_exact(ringfs_t *fs);
+int32_t ringfs_count_exact(ringfs_t * const fs);
 
 /**
  * Append an object at the end of the ring. Deletes oldest objects as needed.
@@ -138,7 +153,17 @@ int32_t ringfs_count_exact(ringfs_t *fs);
  * @param object Object to be stored.
  * @returns Zero on success, -1 on failure.
  */
-int32_t ringfs_append(ringfs_t *fs, const void *object);
+int32_t ringfs_append(ringfs_t * const fs, const void * const object);
+
+/**
+ * Append an object at the end of the cache.
+ *
+ * @param fs Initialized RingFS instance.
+ * @param object Object to be stored.
+ * @param size amount of bytes to store
+ * @returns Zero on success, -1 on failure.
+ */
+int32_t ringfs_append_to_cache(ringfs_t * const fs, const void * const object, int32_t size);
 
 /**
  * Fetch next object from the ring, oldest-first. Advances read cursor.
@@ -147,7 +172,7 @@ int32_t ringfs_append(ringfs_t *fs, const void *object);
  * @param object Buffer to store retrieved object.
  * @returns Zero on success, -1 on failure.
  */
-int32_t ringfs_fetch(ringfs_t *fs, void *object);
+int32_t ringfs_fetch(ringfs_t * const fs, void * const object);
 
 /**
  * Discard all fetched objects up to the read cursor.
@@ -155,9 +180,9 @@ int32_t ringfs_fetch(ringfs_t *fs, void *object);
  * @param fs Initialized RingFS instance.
  * @returns Zero on success, -1 on failure.
  */
-int32_t ringfs_discard(ringfs_t *fs);
+int32_t ringfs_discard(ringfs_t * const fs);
 
-int32_t ringfs_item_discard(ringfs_t *fs);
+int32_t ringfs_item_discard(ringfs_t * const fs);
 
 /**
  * Rewind the read cursor back to the oldest object.
@@ -165,14 +190,32 @@ int32_t ringfs_item_discard(ringfs_t *fs);
  * @param fs Initialized RingFS instance.
  * @returns Zero on success, -1 on failure.
  */
-int32_t ringfs_rewind(ringfs_t *fs);
+int32_t ringfs_rewind(ringfs_t * const fs);
+
+/**
+ * callback definition allowing to erase a sector from a low priority thread
+ */
+typedef void (*tErase_Sector_callback)(const int32_t sector2erase);
+
+/**
+ * @brief sector erase for the given sector
+ *
+ * @param   fs 				pointer to the initialized RingFS instance.
+ * @param	sector2erase	sector to be erased
+ */
+void ringfs_erase_sector(ringfs_t * const fs, const int32_t sector2erase);
 
 /**
  * Dump filesystem metadata. For debugging purposes.
  * @param stream File stream to write to.
  * @param fs Initialized RingFS instance.
  */
-void ringfs_dump(FILE *stream, ringfs_t *fs);
+#ifdef VISUALIZE_SECTORS_AND_SLOTS
+void ringfs_dump(FILE *stream, ringfs_t * const fs);
+#endif
+#ifdef __cplusplus
+}
+#endif
 
 /**
  * @}

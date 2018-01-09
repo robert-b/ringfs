@@ -16,6 +16,8 @@
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdio.h>
+#include <string.h>
 
 #include "ringfs.h"
 
@@ -24,7 +26,8 @@
  * @{
  */
 
-enum sector_status {
+enum sector_status
+{
     SECTOR_ERASED     = 0xFFFFFFFF, /**< Default state after NOR flash erase. */
     SECTOR_FREE       = 0xFFFFFF00, /**< Sector erased. */
     SECTOR_IN_USE     = 0xFFFF0000, /**< Sector contains valid data. */
@@ -32,54 +35,81 @@ enum sector_status {
     SECTOR_FORMATTING = 0x00000000, /**< The entire partition is being formatted. */
 };
 
-struct sector_header {
+struct sector_header
+{
     uint32_t status;
     uint32_t version;
 };
 
 // local prototypes
-static int32_t  _sector_address(ringfs_t *fs, int32_t sector_offset);
-static int32_t  _sector_get_status(ringfs_t *fs, int32_t sector, int32_t *status);
-static int32_t  _sector_set_status(ringfs_t *fs, int32_t sector, int32_t status);
-static int32_t  _sector_free(ringfs_t *fs, int32_t sector);
+static int32_t  _sector_address(ringfs_t * const fs, int32_t sector_offset);
+static int32_t  _sector_get_status(ringfs_t * const fs, int32_t sector, uint32_t * const status);
+static int32_t  _sector_set_status(ringfs_t * const fs, int32_t sector, uint32_t status);
+static int32_t  _sector_free(ringfs_t * const fs, int32_t sector);
 
-static int32_t  _slot_address(ringfs_t *fs, struct ringfs_loc *loc);
-static int32_t  _slot_get_status(ringfs_t *fs, struct ringfs_loc *loc, uint32_t *status);
-static int32_t  _slot_set_status(ringfs_t *fs, struct ringfs_loc *loc, uint32_t status);
+static int32_t  _slot_address(ringfs_t * const fs, struct ringfs_loc * const loc);
+static int32_t  _slot_get_status(ringfs_t * const fs, struct ringfs_loc * const loc, uint32_t * const status);
+static int32_t  _slot_set_status(ringfs_t * const fs, struct ringfs_loc * const loc, uint32_t status);
 
-static bool _loc_equal(struct ringfs_loc *a, struct ringfs_loc *b);
-static void _loc_advance_sector(ringfs_t *fs, struct ringfs_loc *loc);
-static void _loc_advance_slot(ringfs_t *fs, struct ringfs_loc *loc);
+static bool _loc_equal(struct ringfs_loc * const a, struct ringfs_loc * const b);
+static void _loc_advance_sector(ringfs_t * const fs, struct ringfs_loc * const loc);
+static void _loc_advance_slot(ringfs_t * const fs, struct ringfs_loc * const loc);
 
-static int32_t _sector_address(ringfs_t *fs, int32_t sector_offset)
+static int32_t _sector_address(ringfs_t * const fs, int32_t sector_offset)
 {
     return (fs->flash->sector_offset + sector_offset) * fs->flash->sector_size;
 }
 
-static int32_t _sector_get_status(ringfs_t *fs, int32_t sector, int32_t *status)
+static int32_t _sector_free(ringfs_t * const fs, int32_t sector)
 {
-    return fs->flash->read(fs->flash,
-            _sector_address(fs, sector) + (int32_t)offsetof(struct sector_header, status),
-            status, (int32_t)sizeof(*status));
-}
+    const int32_t sector_addr = _sector_address(fs, sector);
+    const int32_t sector_size = fs->flash->sector_size;
+    const int32_t offs        = sector_size - (int32_t)sizeof(struct sector_header) + (int32_t)offsetof(struct sector_header, version);
 
-static int32_t _sector_set_status(ringfs_t *fs, int32_t sector, int32_t status)
-{
-    return fs->flash->program(fs->flash,
-            _sector_address(fs, sector) + (int32_t)offsetof(struct sector_header, status),
-            &status, sizeof(status));
-}
-
-static int32_t _sector_free(ringfs_t *fs, int32_t sector)
-{
-    int32_t sector_addr = _sector_address(fs, sector);
     _sector_set_status(fs, sector, SECTOR_ERASING);
     fs->flash->sector_erase(fs->flash, sector_addr);
-    fs->flash->program(fs->flash,
-            sector_addr + (int32_t)offsetof(struct sector_header, version),
-            &fs->version, sizeof(fs->version));
+    fs->flash->program(
+    		            fs->flash,
+                        sector_addr + offs,
+                        &fs->version,
+					    sizeof(fs->version)
+					   );
     _sector_set_status(fs, sector, SECTOR_FREE);
     return 0;
+}
+
+static int32_t _sector_get_status(ringfs_t * const fs, int32_t sector, uint32_t * const status)
+{
+    const int32_t sector_addr = _sector_address(fs, sector);
+    const int32_t sector_size = fs->flash->sector_size;
+    const int32_t offs        = sector_size - (int32_t)sizeof(struct sector_header) + (int32_t)offsetof(struct sector_header, status);
+	int32_t       res;
+
+    res = fs->flash->read(
+    		              fs->flash,
+                          sector_addr + offs,
+                          status,
+						  (uint32_t)sizeof(int32_t)
+						 );
+
+    return res;
+}
+
+static int32_t _sector_set_status(ringfs_t * const fs, int32_t sector, uint32_t status)
+{
+    const int32_t sector_addr = _sector_address(fs, sector);
+    const int32_t sector_size = fs->flash->sector_size;
+    const int32_t offs        = sector_size - (int32_t)sizeof(struct sector_header) + (int32_t)offsetof(struct sector_header, status);
+	int32_t       res;
+
+    res = fs->flash->program(
+    		                 fs->flash,
+		                     sector_addr + offs,
+                             &status,
+							 sizeof(status)
+							);
+
+    return res;
 }
 
 /**
@@ -88,35 +118,43 @@ static int32_t _sector_free(ringfs_t *fs, int32_t sector)
  * @{
  */
 
-enum slot_status {
+enum slot_status
+{
     SLOT_ERASED   = 0xFFFFFFFF, /**< Default state after NOR flash erase. */
     SLOT_RESERVED = 0xFFFFFF00, /**< Write started but not yet committed. */
     SLOT_VALID    = 0xFFFF0000, /**< Write committed, slot contains valid data. */
     SLOT_GARBAGE  = 0xFF000000, /**< Slot contents discarded and no longer valid. */
 };
 
-struct slot_header {
+struct slot_header
+{
     uint32_t status;
 };
 
-static int32_t _slot_address(ringfs_t *fs, struct ringfs_loc *loc)
+static int32_t _slot_address(ringfs_t * const fs, struct ringfs_loc * const loc)
 {
-    return _sector_address(fs, loc->sector) +
-    		(int32_t)sizeof(struct sector_header) +
-			((int32_t)sizeof(struct slot_header) + fs->object_size) * loc->slot;
+	const int32_t slot_offs = ((int32_t)sizeof(struct slot_header) + fs->object_size) * loc->slot;
+
+    return _sector_address(fs, loc->sector) + slot_offs;
 }
 
-static int32_t _slot_get_status(ringfs_t *fs, struct ringfs_loc *loc, uint32_t *status)
+static int32_t _slot_get_status(ringfs_t * const fs, struct ringfs_loc *const loc, uint32_t * const status)
 {
+	const int32_t offs      = offsetof(struct slot_header, status);
+	const int32_t slot_addr = _slot_address(fs, loc);
+
     return fs->flash->read(fs->flash,
-            _slot_address(fs, loc) + (int32_t)offsetof(struct slot_header, status),
+            slot_addr + offs,
             status, sizeof(*status));
 }
 
-static int32_t _slot_set_status(ringfs_t *fs, struct ringfs_loc *loc, uint32_t status)
+static int32_t _slot_set_status(ringfs_t * const fs, struct ringfs_loc * const loc, uint32_t status)
 {
+	const int32_t offs      = offsetof(struct slot_header, status);
+	const int32_t slot_addr = _slot_address(fs, loc);
+
     return fs->flash->program(fs->flash, 
-            _slot_address(fs, loc) + (int32_t)offsetof(struct slot_header, status),
+            slot_addr + offs,
             &status, sizeof(status));
 }
 
@@ -126,26 +164,34 @@ static int32_t _slot_set_status(ringfs_t *fs, struct ringfs_loc *loc, uint32_t s
  * @{
  */
 
-static bool _loc_equal(struct ringfs_loc *a, struct ringfs_loc *b)
+static bool _loc_equal(struct ringfs_loc * const a, struct ringfs_loc * const b)
 {
     return (a->sector == b->sector) && (a->slot == b->slot);
 }
 
 /** Advance a location to the beginning of the next sector. */
-static void _loc_advance_sector(ringfs_t *fs, struct ringfs_loc *loc)
+static void _loc_advance_sector(ringfs_t * const fs, struct ringfs_loc * const loc)
 {
     loc->slot = 0;
     loc->sector++;
     if (loc->sector >= fs->flash->sector_count)
+    {
         loc->sector = 0;
+    }
+
+    return;
 }
 
 /** Advance a location to the next slot, advancing the sector too if needed. */
-static void _loc_advance_slot(ringfs_t *fs, struct ringfs_loc *loc)
+static void _loc_advance_slot(ringfs_t * const fs, struct ringfs_loc * const loc)
 {
     loc->slot++;
     if (loc->slot >= fs->slots_per_sector)
+    {
         _loc_advance_sector(fs, loc);
+    }
+
+    return;
 }
 
 /**
@@ -154,7 +200,7 @@ static void _loc_advance_slot(ringfs_t *fs, struct ringfs_loc *loc)
 
 /* And here we go. */
 
-int32_t ringfs_init(ringfs_t *fs, struct ringfs_flash_partition *flash, uint32_t version, int32_t object_size)
+int32_t ringfs_init(ringfs_t * const fs, struct ringfs_flash_partition * const flash, uint32_t version, int32_t object_size)
 {
     /* Copy arguments to instance. */
     fs->flash = flash;
@@ -165,19 +211,22 @@ int32_t ringfs_init(ringfs_t *fs, struct ringfs_flash_partition *flash, uint32_t
     fs->slots_per_sector = (fs->flash->sector_size - (int32_t)sizeof(struct sector_header)) /
                            ((int32_t)sizeof(struct slot_header) + fs->object_size);
 
+    fs->cache_filling_level = 0;
+    memset(fs->cache, 0, sizeof(fs->cache));
+
     return 0;
 }
 
-int32_t ringfs_format(ringfs_t *fs)
+int32_t ringfs_format(ringfs_t * const fs)
 {
     /* Mark all sectors to prevent half-erased filesystems. */
-    for (int32_t sector=0; sector<fs->flash->sector_count; sector++)
+    for (int32_t sector = 0; sector < fs->flash->sector_count; sector++)
     {
         _sector_set_status(fs, sector, SECTOR_FORMATTING);
     }
 
     /* Erase, update version, mark as free. */
-    for (int32_t sector=0; sector<fs->flash->sector_count; sector++)
+    for (int32_t sector = 0; sector < fs->flash->sector_count; sector++)
     {
         _sector_free(fs, sector);
     }
@@ -193,7 +242,7 @@ int32_t ringfs_format(ringfs_t *fs)
     return 0;
 }
 
-int32_t ringfs_scan(ringfs_t *fs)
+int32_t ringfs_scan(ringfs_t * const fs)
 {
     uint32_t previous_sector_status = SECTOR_FREE;
     /* The read sector is the first IN_USE sector *after* a FREE sector
@@ -208,18 +257,21 @@ int32_t ringfs_scan(ringfs_t *fs)
     bool used_seen = false;
 
     /* Iterate over sectors. */
-    for (int32_t sector=0; sector<fs->flash->sector_count; sector++)
+    for (int32_t sector = 0; sector < fs->flash->sector_count; sector++)
     {
-        int32_t addr = _sector_address(fs, sector);
+        const int32_t sector_size = fs->flash->sector_size;
+        const int32_t offs        = sector_size - (int32_t)sizeof(struct sector_header) + (int32_t)offsetof(struct sector_header, status);
+        const int32_t addr        = _sector_address(fs, sector);
 
         /* Read sector header. */
         struct sector_header header;
-        fs->flash->read(fs->flash, addr, &header, sizeof(header));
+        int32_t len = fs->flash->read(fs->flash, addr+offs, &header, sizeof(header));
+        (void)len;
 
         /* Detect partially-formatted partitions. */
         if (header.status == SECTOR_FORMATTING)
         {
-            printf("ringfs_scan: partially formatted partition\r\n");
+            //printf("ringfs_scan: partially formatted partition\r\n");
             return -1;
         }
 
@@ -233,7 +285,7 @@ int32_t ringfs_scan(ringfs_t *fs)
         /* Detect corrupted sectors. */
         if (header.status != SECTOR_FREE && header.status != SECTOR_IN_USE)
         {
-            printf("ringfs_scan: corrupted sector %d\r\n", sector);
+            //printf("ringfs_scan: corrupted sector %d\r\n", sector);
             return -1;
         }
 
@@ -241,7 +293,7 @@ int32_t ringfs_scan(ringfs_t *fs)
          * could have been invalid due to a partial erase. */
         if (header.version != fs->version)
         {
-            printf("ringfs_scan: incompatible version 0x%08"PRIx32"\r\n", header.version);
+            //printf("ringfs_scan: incompatible version 0x%08"PRIx32"\r\n", header.version);
             return -1;
         }
 
@@ -272,14 +324,14 @@ int32_t ringfs_scan(ringfs_t *fs)
     }
 
     /* Detect the lack of a FREE sector. */
-    if (!free_seen)
+    if ( !free_seen )
     {
-        printf("ringfs_scan: invariant violated: no FREE sector found\r\n");
+        //printf("ringfs_scan: invariant violated: no FREE sector found\r\n");
         return -1;
     }
 
-    /* Start writing at the first sector if the filesystem is empty. */
-    if (!used_seen)
+    /* Start writing at the first sector if the file system is empty. */
+    if ( !used_seen )
     {
         write_sector = 0;
     }
@@ -304,7 +356,7 @@ int32_t ringfs_scan(ringfs_t *fs)
      * over garbage/invalid slots until something of value is found or we reach
      * the write head which means there's no data. */
     fs->read.sector = read_sector;
-    fs->read.slot = 0;
+    fs->read.slot   = 0;
     while (!_loc_equal(&fs->read, &fs->write))
     {
         uint32_t status;
@@ -323,12 +375,12 @@ int32_t ringfs_scan(ringfs_t *fs)
     return 0;
 }
 
-int32_t ringfs_capacity(ringfs_t *fs)
+int32_t ringfs_capacity(ringfs_t * const fs)
 {
     return fs->slots_per_sector * (fs->flash->sector_count - 1);
 }
 
-int32_t ringfs_count_estimate(ringfs_t *fs)
+int32_t ringfs_count_estimate(ringfs_t * const fs)
 {
     int32_t sector_diff = (fs->write.sector - fs->read.sector + fs->flash->sector_count) %
         fs->flash->sector_count;
@@ -336,7 +388,7 @@ int32_t ringfs_count_estimate(ringfs_t *fs)
     return sector_diff * fs->slots_per_sector + fs->write.slot - fs->read.slot;
 }
 
-int32_t ringfs_count_exact(ringfs_t *fs)
+int32_t ringfs_count_exact(ringfs_t * const fs)
 {
     int32_t count = 0;
 
@@ -358,7 +410,38 @@ int32_t ringfs_count_exact(ringfs_t *fs)
     return count;
 }
 
-int32_t ringfs_append(ringfs_t *fs, const void *object)
+/**
+ * @brief append the data chunk to the cache.
+ *        each page for the S25FL164 will be filled.
+ *
+ * @param fs
+ * @param object
+ * @param size
+ * @return
+ */
+int32_t ringfs_append_to_cache(ringfs_t * const fs, const void * const object, int32_t size)
+{
+	int32_t res = size;
+
+	if ((size + fs->cache_filling_level) > CACHE_SIZE)
+	{
+		// write cached page
+		res = ringfs_append(fs, fs->cache);
+		if (!res)
+		{
+			res = size;
+		}
+	    fs->cache_filling_level = 0;
+	    //memset(fs->cache, 0, CACHE_SIZE);
+	}
+
+	memcpy(&fs->cache[fs->cache_filling_level], object, (size_t)size);
+    fs->cache_filling_level += size;
+
+	return res;
+}
+
+int32_t ringfs_append(ringfs_t * const fs, const void * const object)
 {
     uint32_t status;
 
@@ -371,7 +454,7 @@ int32_t ringfs_append(ringfs_t *fs, const void *object)
 
     /* Make sure the next sector is free. */
     int32_t next_sector = (fs->write.sector+1) % fs->flash->sector_count;
-    _sector_get_status(fs, next_sector, (int32_t *)&status);
+    _sector_get_status(fs, next_sector, &status);
     if (status != SECTOR_FREE)
     {
         /* Next sector must be freed. But first... */
@@ -392,7 +475,7 @@ int32_t ringfs_append(ringfs_t *fs, const void *object)
     }
 
     /* Now we can make sure the current write sector is writable. */
-    _sector_get_status(fs, fs->write.sector, (int32_t *)&status);
+    _sector_get_status(fs, fs->write.sector, &status);
     if (status == SECTOR_FREE)
     {
         /* Free sector. Mark as used. */
@@ -400,7 +483,7 @@ int32_t ringfs_append(ringfs_t *fs, const void *object)
     }
     else if (status != SECTOR_IN_USE)
     {
-        printf("ringfs_append: corrupted filesystem\r\n");
+        //printf("ringfs_append: corrupted filesystem\r\n");
         return -1;
     }
 
@@ -408,9 +491,16 @@ int32_t ringfs_append(ringfs_t *fs, const void *object)
     _slot_set_status(fs, &fs->write, SLOT_RESERVED);
 
     /* Write object. */
-    fs->flash->program(fs->flash,
-            _slot_address(fs, &fs->write) + (int32_t)sizeof(struct slot_header),
-            object, fs->object_size);
+    const int32_t slot_addr = _slot_address(fs, &fs->write);
+    const int32_t slot_h_size = sizeof(struct slot_header);
+    fs->flash->program(
+    		           fs->flash,
+                       slot_addr + slot_h_size,
+                       object,
+					   fs->object_size
+					  );
+
+    (void) object;
 
     /* Commit write. */
     _slot_set_status(fs, &fs->write, SLOT_VALID);
@@ -418,10 +508,18 @@ int32_t ringfs_append(ringfs_t *fs, const void *object)
     /* Advance the write head. */
     _loc_advance_slot(fs, &fs->write);
 
-    return 0;
+    return 0; // fs->object_size;
 }
 
-int32_t ringfs_fetch(ringfs_t *fs, void *object)
+
+void ringfs_erase_sector(ringfs_t * const fs, const int32_t sector2erase)
+{
+    /* Free the next sector. */
+    _sector_free(fs, sector2erase);
+}
+
+
+int32_t ringfs_fetch(ringfs_t * const fs, void * const object)
 {
     /* Advance forward in search of a valid slot. */
     while (!_loc_equal(&fs->cursor, &fs->write))
@@ -445,7 +543,7 @@ int32_t ringfs_fetch(ringfs_t *fs, void *object)
     return -1;
 }
 
-int32_t ringfs_discard(ringfs_t *fs)
+int32_t ringfs_discard(ringfs_t * const fs)
 {
     while (!_loc_equal(&fs->read, &fs->cursor))
     {
@@ -456,7 +554,7 @@ int32_t ringfs_discard(ringfs_t *fs)
     return 0;
 }
 
-int32_t ringfs_item_discard(ringfs_t *fs)
+int32_t ringfs_item_discard(ringfs_t * const fs)
 {
         _slot_set_status(fs, &fs->read, SLOT_GARBAGE);
         _loc_advance_slot(fs, &fs->read);
@@ -464,28 +562,31 @@ int32_t ringfs_item_discard(ringfs_t *fs)
     return 0;
 }
 
-int32_t ringfs_rewind(ringfs_t *fs)
+int32_t ringfs_rewind(ringfs_t * const fs)
 {
     fs->cursor = fs->read;
     return 0;
 }
 
-void ringfs_dump(FILE *stream, ringfs_t *fs)
+#ifdef VISUALIZE_SECTORS_AND_SLOTS
+void ringfs_dump(FILE *stream, ringfs_t * const fs)
 {
     const char *description;
 
     fprintf(stream, "RingFS read: {%d,%d} cursor: {%d,%d} write: {%d,%d}\n",
-            fs->read.sector, fs->read.slot,
-            fs->cursor.sector, fs->cursor.slot,
-            fs->write.sector, fs->write.slot);
+            (int)fs->read.sector, (int)fs->read.slot,
+            (int)fs->cursor.sector, (int)fs->cursor.slot,
+            (int)fs->write.sector, (int)fs->write.slot);
 
-    for (int32_t sector = 0; sector < fs->flash->sector_count; sector++)
+    for (int sector=0; sector<fs->flash->sector_count; sector++)
     {
-        int32_t addr = _sector_address(fs, sector);
+        const int32_t addr        = _sector_address(fs, sector);
+        const int32_t sector_size = fs->flash->sector_size;
+        const int32_t offs        = sector_size - (int32_t)sizeof(struct sector_header) + (int32_t)offsetof(struct sector_header, status);
 
         /* Read sector header. */
         struct sector_header header;
-        fs->flash->read(fs->flash, addr, &header, sizeof(header));
+        fs->flash->read(fs->flash, addr+offs, &header, sizeof(header));
 
         switch (header.status)
         {
@@ -498,7 +599,7 @@ void ringfs_dump(FILE *stream, ringfs_t *fs)
         }
 
         fprintf(stream, "[%04d] [v=0x%08"PRIx32"] [%-10s] ",
-                sector, header.version, description);
+                sector, (int)header.version, description);
 
         for (int32_t slot=0; slot<fs->slots_per_sector; slot++)
         {
@@ -523,7 +624,7 @@ void ringfs_dump(FILE *stream, ringfs_t *fs)
 
     fflush(stream);
 }
-
+#endif
 /**
  * @}
  */
